@@ -161,9 +161,15 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     os.remove(input_path)
 
 def main():
-    ApplicationBuilder().token(BOT_TOKEN).build().run_polling()
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
+    
+    print("🤖 Telegram Bot चालू हो गया है...")
+    app.run_polling()
 
 if __name__ == '__main__':
     main()
+    
     
   
