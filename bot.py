@@ -16,7 +16,7 @@ import output_pb2
 
 warnings.filterwarnings("ignore", category=InsecureRequestWarning)
 
-BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"  # Put your actual telegram bot token here
+BOT_TOKEN = "8854493990:AAEtizcvTnx6cfc_Fr4Mbu9KJ6lW9TQBncc"
 
 AES_KEY = b'Yg&tc%DEuh6%Zc^8'
 AES_IV = b'6oyZDr22E3ychjM%'
