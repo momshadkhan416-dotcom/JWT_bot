@@ -9,13 +9,14 @@ from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import my_pb2
 import output_pb2
 
 warnings.filterwarnings("ignore", category=InsecureRequestWarning)
 
-BOT_TOKEN = "8854493990:AAFTFOWnWkHvqO0nDN95Rxqg4AiOrBXBC4Q"
+BOT_TOKEN = "8854493990:AAEtizcvTnx6cfc_Fr4Mbu9KJ6lW9TQBncc"
 
 AES_KEY = b'Yg&tc%DEuh6%Zc^8'
 AES_IV = b'6oyZDr22E3ychjM%'
@@ -30,8 +31,8 @@ def get_token(password, uid):
         "Connection": "close"
     }
     data = {
-        "uid": str(uid),
-        "password": str(password),
+        "uid": str(uid).strip(),
+        "password": str(password).strip(),
         "response_type": "token",
         "client_type": "2",
         "client_secret": "2ee44819e9b4598845141067b281621874d0d5d7af9d8f7e00c1e54715b7d1e3",
@@ -59,9 +60,12 @@ def parse_response(response_content):
     return response_dict
 
 def process_single_account(uid, password):
-    token_data = get_token(password, uid)
+    uid_str = str(uid).strip()
+    pass_str = str(password).strip()
+
+    token_data = get_token(pass_str, uid_str)
     if not token_data or "access_token" not in token_data:
-        return None
+        return uid_str, pass_str, None, "N/A"
 
     try:
         game_data = my_pb2.GameData()
@@ -140,10 +144,12 @@ def process_single_account(uid, password):
             example_msg = output_pb2.Lokesh()
             example_msg.ParseFromString(response.content)
             response_dict = parse_response(str(example_msg))
-            return response_dict.get("token", None)
+            jwt_tok = response_dict.get("token", None)
+            region_name = response_dict.get("region", "Unknown")
+            return uid_str, pass_str, jwt_tok, region_name
     except Exception:
-        return None
-    return None
+        pass
+    return uid_str, pass_str, None, "N/A"
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
@@ -168,7 +174,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Please send a valid .json file!")
         return
 
-    msg = await update.message.reply_text(f"⏳ Processing accounts from {doc.file_name}...")
+    msg = await update.message.reply_text(f"⏳ Downloading and processing accounts from `{doc.file_name}`...")
     
     file_path = f"temp_{doc.file_name}"
     try:
@@ -179,58 +185,83 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data = json.load(f)
 
         accounts_to_process = []
-        
-        # Flexible parsing for different JSON structures (List of dicts or Dictionary)
         if isinstance(data, list):
             for acc in data:
                 if isinstance(acc, dict):
-                    u = str(acc.get("uid") or acc.get("account_id") or acc.get("id") or "")
-                    p = str(acc.get("password") or acc.get("pass") or "")
-                    if u and p:
-                        accounts_to_process.append((u, p))
+                    u = acc.get("uid") or acc.get("account_id") or acc.get("id")
+                    p = acc.get("password") or acc.get("pass")
+                    if u is not None and p is not None:
+                        accounts_to_process.append((str(u).strip(), str(p).strip()))
         elif isinstance(data, dict):
             for u, p in data.items():
                 if isinstance(p, dict):
-                    pw = str(p.get("password") or p.get("pass") or "")
-                    if u and pw:
-                        accounts_to_process.append((str(u), pw))
+                    pw = p.get("password") or p.get("pass")
+                    if u is not None and pw is not None:
+                        accounts_to_process.append((str(u).strip(), str(pw).strip()))
                 else:
-                    if u and p:
-                        accounts_to_process.append((str(u), str(p)))
+                    if u is not None and p is not None:
+                        accounts_to_process.append((str(u).strip(), str(p).strip()))
 
         total_count = len(accounts_to_process)
         jwt_tokens = {}
         working_accs = {}
         lost_accs = {}
+        region_tokens = {}
         success_count = 0
 
-        for uid, password in accounts_to_process:
-            token = process_single_account(uid, password)
+        # Run multi-threaded requests for speed
+        loop = asyncio.get_event_loop()
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            tasks = [
+                loop.run_in_executor(executor, process_single_account, u, p)
+                for u, p in accounts_to_process
+            ]
+            results = await asyncio.gather(*tasks)
+
+        for u_str, p_str, token, reg in results:
             if token and token != "N/A":
-                jwt_tokens[uid] = token
-                working_accs[uid] = password
+                jwt_tokens[u_str] = token
+                working_accs[u_str] = p_str
                 success_count += 1
+                if reg not in region_tokens:
+                    region_tokens[reg] = {}
+                region_tokens[reg][u_str] = token
             else:
-                lost_accs[uid] = password
+                lost_accs[u_str] = p_str
 
         jwt_file = "jwt_token.json"
         working_file = "working_account.json"
         lost_file = "lost_account.json"
-        region_file = "accountsUnknown_Region.json"
 
-        for fpath, content in [(jwt_file, jwt_tokens), (working_file, working_accs), (lost_file, lost_accs), (region_file, jwt_tokens)]:
-            with open(fpath, 'w', encoding='utf-8') as f:
-                json.dump(content, f, indent=4)
+        output_files = []
+
+        with open(jwt_file, 'w', encoding='utf-8') as f:
+            json.dump(jwt_tokens, f, indent=4)
+        output_files.append(jwt_file)
+
+        with open(working_file, 'w', encoding='utf-8') as f:
+            json.dump(working_accs, f, indent=4)
+        output_files.append(working_file)
+
+        with open(lost_file, 'w', encoding='utf-8') as f:
+            json.dump(lost_accs, f, indent=4)
+        output_files.append(lost_file)
+
+        for reg_name, reg_dict in region_tokens.items():
+            reg_file = f"accounts{reg_name}_Region.json"
+            with open(reg_file, 'w', encoding='utf-8') as f:
+                json.dump(reg_dict, f, indent=4)
+            output_files.append(reg_file)
 
         summary = (
-            f"🏁 Processing Complete for `{doc.file_name}`\n\n"
-            f"📊 Total Accounts: {total_count}\n"
-            f"🟢 Successful Tokens: {success_count}\n"
-            f"❌ Failed/Lost: {total_count - success_count}"
+            f"🏁 **Manual Processing Complete for `{doc.file_name}`**\n\n"
+            f"📊 **Total Accounts Processed:** {total_count}\n"
+            f"🟢 **Successful Tokens:** {success_count}\n"
+            f"❌ **Failed/Invalid Accounts:** {total_count - success_count}"
         )
         await msg.edit_text(summary, parse_mode="Markdown")
 
-        for f_path in [jwt_file, working_file, lost_file, region_file]:
+        for f_path in output_files:
             if os.path.exists(f_path) and os.path.getsize(f_path) > 2:
                 with open(f_path, 'rb') as f:
                     await update.message.reply_document(document=f, caption=f"File: {f_path}")
@@ -243,7 +274,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             os.remove(file_path)
 
 async def post_init(application):
-    print("🤖 Bot started successfully with flexible JSON parser...")
+    print("🤖 Bot started successfully with fixed Integer/String parser...")
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).post_init(post_init).build()
@@ -254,3 +285,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+        
