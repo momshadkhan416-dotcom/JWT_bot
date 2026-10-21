@@ -10,13 +10,12 @@ from Crypto.Util.Padding import pad
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
-# Protobuf modules import (Ensure my_pb2.py and output_pb2.py are in the same folder)
 import my_pb2
 import output_pb2
 
 warnings.filterwarnings("ignore", category=InsecureRequestWarning)
 
-BOT_TOKEN = "8854493990:AAFTFOWnWkHvqO0nDN95Rxqg4AiOrBXBC4Q"
+BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"  # Put your actual telegram bot token here
 
 AES_KEY = b'Yg&tc%DEuh6%Zc^8'
 AES_IV = b'6oyZDr22E3ychjM%'
@@ -31,8 +30,8 @@ def get_token(password, uid):
         "Connection": "close"
     }
     data = {
-        "uid": uid,
-        "password": password,
+        "uid": str(uid),
+        "password": str(password),
         "response_type": "token",
         "client_type": "2",
         "client_secret": "2ee44819e9b4598845141067b281621874d0d5d7af9d8f7e00c1e54715b7d1e3",
@@ -48,8 +47,7 @@ def get_token(password, uid):
 
 def encrypt_message(key, iv, plaintext):
     cipher = AES.new(key, AES.MODE_CBC, iv)
-    padded_message = pad(plaintext, AES.block_size)
-    return cipher.encrypt(padded_message)
+    return cipher.encrypt(pad(plaintext, AES.block_size))
 
 def parse_response(response_content):
     response_dict = {}
@@ -136,8 +134,7 @@ def process_single_account(uid, password):
             'X-GA': "v1 1",
             'ReleaseVersion': "OB54"
         }
-        edata = bytes.fromhex(hex_encrypted_data)
-        response = requests.post(url, data=edata, headers=headers, verify=False, timeout=10)
+        response = requests.post(url, data=bytes.fromhex(hex_encrypted_data), headers=headers, verify=False, timeout=10)
         
         if response.status_code == 200:
             example_msg = output_pb2.Lokesh()
@@ -156,39 +153,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ["Cancel ❌"]
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    welcome_text = (
-        "👋 Welcome!\n\n"
-        "✅ Send your `.json` guest accounts file here to generate real JWT tokens.\n"
-        "📁 Files like `jwt_token.json`, `working_account.json`, and `lost_account.json` will be returned instantly."
-    )
-    await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode="Markdown")
+    await update.message.reply_text("👋 Welcome!\n\nSend your `.json` accounts file here.", reply_markup=reply_markup, parse_mode="Markdown")
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     if text == "Process File ⚙️":
-        await update.message.reply_text("Please upload your `.json` file containing guest accounts now.")
-    elif text == "Vip Status 👑":
-        await update.message.reply_text("👑 Your VIP Status: Free User")
-    elif text == "Vip Shop 🛒":
-        await update.message.reply_text("🛒 Contact admin to purchase VIP.")
-    elif text == "GitHub Status 📊":
-        await update.message.reply_text("📊 GitHub Connection: Connected")
-    elif text == "Scheduled Files 📅":
-        await update.message.reply_text("📅 No scheduled files.")
-    elif text == "Help 🆘":
-        await update.message.reply_text("🆘 Send a `.json` file to process tokens.")
-    elif text == "Cancel ❌":
-        await update.message.reply_text("❌ Cancelled.")
+        await update.message.reply_text("Please upload your `.json` file now.")
     else:
-        await update.message.reply_text("⚠️ Please use the menu buttons or /start.")
+        await update.message.reply_text(f"Selected: {text}")
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     doc = update.message.document
     if not doc.file_name.endswith('.json'):
-        await update.message.reply_text("❌ Please send a valid .json file only!")
+        await update.message.reply_text("❌ Please send a valid .json file!")
         return
 
-    msg = await update.message.reply_text(f"⏳ Downloading and processing accounts from {doc.file_name}...")
+    msg = await update.message.reply_text(f"⏳ Processing accounts from {doc.file_name}...")
     
     file_path = f"temp_{doc.file_name}"
     try:
@@ -198,25 +178,31 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with open(file_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
 
+        accounts_to_process = []
+        
+        # Flexible parsing for different JSON structures (List of dicts or Dictionary)
+        if isinstance(data, list):
+            for acc in data:
+                if isinstance(acc, dict):
+                    u = str(acc.get("uid") or acc.get("account_id") or acc.get("id") or "")
+                    p = str(acc.get("password") or acc.get("pass") or "")
+                    if u and p:
+                        accounts_to_process.append((u, p))
+        elif isinstance(data, dict):
+            for u, p in data.items():
+                if isinstance(p, dict):
+                    pw = str(p.get("password") or p.get("pass") or "")
+                    if u and pw:
+                        accounts_to_process.append((str(u), pw))
+                else:
+                    if u and p:
+                        accounts_to_process.append((str(u), str(p)))
+
+        total_count = len(accounts_to_process)
         jwt_tokens = {}
         working_accs = {}
         lost_accs = {}
         success_count = 0
-        total_count = 0
-
-        accounts_to_process = []
-        if isinstance(data, list):
-            for acc in data:
-                u = str(acc.get("uid", ""))
-                p = str(acc.get("password", ""))
-                if u and p:
-                    accounts_to_process.append((u, p))
-        elif isinstance(data, dict):
-            for u, p in data.items():
-                if u and p:
-                    accounts_to_process.append((str(u), str(p)))
-
-        total_count = len(accounts_to_process)
 
         for uid, password in accounts_to_process:
             token = process_single_account(uid, password)
@@ -237,8 +223,8 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 json.dump(content, f, indent=4)
 
         summary = (
-            f"📊 Processing Complete for `{doc.file_name}`\n\n"
-            f"✅ Total Accounts: {total_count}\n"
+            f"🏁 Processing Complete for `{doc.file_name}`\n\n"
+            f"📊 Total Accounts: {total_count}\n"
             f"🟢 Successful Tokens: {success_count}\n"
             f"❌ Failed/Lost: {total_count - success_count}"
         )
@@ -251,13 +237,13 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 os.remove(f_path)
 
     except Exception as e:
-        await msg.edit_text(f"❌ Error during processing: {str(e)}")
+        await msg.edit_text(f"❌ Error: {str(e)}")
     finally:
         if os.path.exists(file_path):
             os.remove(file_path)
 
 async def post_init(application):
-    print("🤖 Telegram Bot has started successfully with Real JWT Logic...")
+    print("🤖 Bot started successfully with flexible JSON parser...")
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).post_init(post_init).build()
