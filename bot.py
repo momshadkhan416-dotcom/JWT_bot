@@ -16,35 +16,26 @@ import output_pb2
 
 warnings.filterwarnings("ignore", category=InsecureRequestWarning)
 
-BOT_TOKEN = "8854493990:AAEtizcvTnx6cfc_Fr4Mbu9KJ6lW9TQBncc"
+BOT_TOKEN = "8854493990:AAGiLACs9kqtrdx3LNOI73xSgpiR5-aS4nQ"
 
 AES_KEY = b'Yg&tc%DEuh6%Zc^8'
 AES_IV = b'6oyZDr22E3ychjM%'
 
-def get_token(password, uid):
-    url = "https://ffmconnect.live.gop.garenanow.com/oauth/guest/token/grant"
-    headers = {
-        "User-Agent": "GarenaMSDK/4.0.19P4 (Vivo Y15c; Android 12; en;IN;)",
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "close"
-    }
-    data = {
-        "uid": str(uid).strip(),
-        "password": str(password).strip(),
-        "response_type": "token",
-        "client_type": "2",
-        "client_secret": "2ee44819e9b4598845141067b281621874d0d5d7af9d8f7e00c1e54715b7d1e3",
-        "client_id": "100067"
-    }
+def get_token_inspect_data(access_token):
     try:
-        response = requests.post(url, headers=headers, data=data, verify=False, timeout=10)
-        if response.status_code != 200:
-            return None
-        return response.json()
-    except Exception as e:
-        print(f"Token grant error for UID {uid}: {e}")
-        return None
+        url = f"https://100067.connect.garena.com/oauth/token/inspect?token={access_token}"
+        headers = {
+            "User-Agent": "GarenaMSDK/4.0.19P4 (Vivo Y15c; Android 12; en;IN;)",
+            "Connection": "close"
+        }
+        response = requests.get(url, headers=headers, verify=False, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            if 'open_id' in data and 'platform' in data and 'uid' in data:
+                return data
+    except Exception:
+        pass
+    return None
 
 def encrypt_message(key, iv, plaintext):
     cipher = AES.new(key, AES.MODE_CBC, iv)
@@ -59,13 +50,14 @@ def parse_response(response_content):
             response_dict[key.strip()] = value.strip().strip('"')
     return response_dict
 
-def process_single_account(uid, password):
-    uid_str = str(uid).strip()
-    pass_str = str(password).strip()
+def process_access_token(access_token, uid=None, platform_type=4):
+    token_data = get_token_inspect_data(access_token)
+    if not token_data:
+        return str(uid), None, "N/A"
 
-    token_data = get_token(pass_str, uid_str)
-    if not token_data or "access_token" not in token_data:
-        return uid_str, pass_str, None, "N/A"
+    open_id = token_data["open_id"]
+    platform_type = token_data.get("platform", platform_type)
+    uid_str = str(uid or token_data["uid"]).strip()
 
     try:
         game_data = my_pb2.GameData()
@@ -84,12 +76,12 @@ def process_single_account(uid, password):
         game_data.total_ram = 4096
         game_data.gpu_name = "Adreno (TM) 610"
         game_data.gpu_version = "OpenGL ES 3.2"
-        game_data.user_id = "Google|c71ff1e2-457f-4e2d-83a1-c519fa3f2a44"
+        game_data.user_id = uid_str
         game_data.ip_address = "182.75.115.22"
         game_data.language = "en"
-        game_data.open_id = token_data.get("open_id", "")
-        game_data.access_token = token_data.get("access_token", "")
-        game_data.platform_type = 4
+        game_data.open_id = open_id
+        game_data.access_token = access_token
+        game_data.platform_type = platform_type
         game_data.device_form_factor = "Handheld"
         game_data.device_model = "realme RMX1825"
         game_data.field_60 = 30000
@@ -120,8 +112,8 @@ def process_single_account(uid, password):
         game_data.total_storage = 64000
         game_data.field_97 = 1
         game_data.field_98 = 1
-        game_data.field_99 = "4"
-        game_data.field_100 = b"4"
+        game_data.field_99 = str(platform_type)
+        game_data.field_100 = str(platform_type).encode()
 
         serialized_data = game_data.SerializeToString()
         encrypted_data = encrypt_message(AES_KEY, AES_IV, serialized_data)
@@ -146,10 +138,10 @@ def process_single_account(uid, password):
             response_dict = parse_response(str(example_msg))
             jwt_tok = response_dict.get("token", None)
             region_name = response_dict.get("region", "Unknown")
-            return uid_str, pass_str, jwt_tok, region_name
-    except Exception as e:
-        print(f"MajorLogin error for UID {uid}: {e}")
-    return uid_str, pass_str, None, "N/A"
+            return uid_str, jwt_tok, region_name
+    except Exception:
+        pass
+    return uid_str, None, "N/A"
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
@@ -159,7 +151,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ["Cancel ❌"]
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    await update.message.reply_text("👋 Welcome!\n\nSend your `.json` accounts file here.", reply_markup=reply_markup, parse_mode="Markdown")
+    await update.message.reply_text("👋 Welcome!\n\nSend your `.json` access tokens file here.", reply_markup=reply_markup, parse_mode="Markdown")
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
@@ -174,7 +166,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Please send a valid .json file!")
         return
 
-    msg = await update.message.reply_text(f"⏳ Downloading and processing accounts from `{doc.file_name}`...")
+    msg = await update.message.reply_text(f"⏳ Downloading and processing tokens from `{doc.file_name}`...")
     
     file_path = f"temp_{doc.file_name}"
     try:
@@ -186,23 +178,18 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         accounts_to_process = []
         
-        # Universal parser for both List and Dictionary formats
-        if isinstance(data, list):
+        # Parse dictionary format where key is uid and value is access_token
+        if isinstance(data, dict):
+            for u, token_val in data.items():
+                if u is not None and token_val is not None:
+                    accounts_to_process.append((str(u).strip(), str(token_val).strip()))
+        elif isinstance(data, list):
             for acc in data:
                 if isinstance(acc, dict):
                     u = acc.get("uid") or acc.get("account_id") or acc.get("id")
-                    p = acc.get("password") or acc.get("pass")
-                    if u is not None and p is not None:
-                        accounts_to_process.append((str(u).strip(), str(p).strip()))
-        elif isinstance(data, dict):
-            for u, p in data.items():
-                if isinstance(p, dict):
-                    pw = p.get("password") or p.get("pass")
-                    if u is not None and pw is not None:
-                        accounts_to_process.append((str(u).strip(), str(pw).strip()))
-                else:
-                    if u is not None and p is not None:
-                        accounts_to_process.append((str(u).strip(), str(p).strip()))
+                    t = acc.get("access_token") or acc.get("token") or acc.get("password")
+                    if u is not None and t is not None:
+                        accounts_to_process.append((str(u).strip(), str(t).strip()))
 
         total_count = len(accounts_to_process)
         jwt_tokens = {}
@@ -214,21 +201,21 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         loop = asyncio.get_event_loop()
         with ThreadPoolExecutor(max_workers=10) as executor:
             tasks = [
-                loop.run_in_executor(executor, process_single_account, u, p)
-                for u, p in accounts_to_process
+                loop.run_in_executor(executor, process_access_token, token_val, u)
+                for u, token_val in accounts_to_process
             ]
             results = await asyncio.gather(*tasks)
 
-        for u_str, p_str, token, reg in results:
+        for u_str, token, reg in results:
             if token and token != "N/A":
                 jwt_tokens[u_str] = token
-                working_accs[u_str] = p_str
+                working_accs[u_str] = token
                 success_count += 1
                 if reg not in region_tokens:
                     region_tokens[reg] = {}
                 region_tokens[reg][u_str] = token
             else:
-                lost_accs[u_str] = p_str
+                lost_accs[u_str] = "FAILED_TOKEN"
 
         jwt_file = "jwt_token.json"
         working_file = "working_account.json"
@@ -275,7 +262,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             os.remove(file_path)
 
 async def post_init(application):
-    print("🤖 Bot started successfully without Host header conflict...")
+    print("🤖 Bot started successfully with Access Token inspection handler...")
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).post_init(post_init).build()
@@ -286,4 +273,4 @@ def main():
 
 if __name__ == '__main__':
     main()
-            
+        
