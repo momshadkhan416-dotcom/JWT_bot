@@ -9,14 +9,14 @@ from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 
 import my_pb2
 import output_pb2
 
 warnings.filterwarnings("ignore", category=InsecureRequestWarning)
 
-BOT_TOKEN = "8854493990:AAEtizcvTnx6cfc_Fr4Mbu9KJ6lW9TQBncc"
+BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"  # Put your actual telegram bot token here
 
 AES_KEY = b'Yg&tc%DEuh6%Zc^8'
 AES_IV = b'6oyZDr22E3ychjM%'
@@ -24,7 +24,6 @@ AES_IV = b'6oyZDr22E3ychjM%'
 def get_token(password, uid):
     url = "https://ffmconnect.live.gop.garenanow.com/oauth/guest/token/grant"
     headers = {
-        "Host": "100067.connect.garena.com",
         "User-Agent": "GarenaMSDK/4.0.19P4 (Vivo Y15c; Android 12; en;IN;)",
         "Content-Type": "application/x-www-form-urlencoded",
         "Accept-Encoding": "gzip, deflate, br",
@@ -43,7 +42,8 @@ def get_token(password, uid):
         if response.status_code != 200:
             return None
         return response.json()
-    except Exception:
+    except Exception as e:
+        print(f"Token grant error for UID {uid}: {e}")
         return None
 
 def encrypt_message(key, iv, plaintext):
@@ -147,8 +147,8 @@ def process_single_account(uid, password):
             jwt_tok = response_dict.get("token", None)
             region_name = response_dict.get("region", "Unknown")
             return uid_str, pass_str, jwt_tok, region_name
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"MajorLogin error for UID {uid}: {e}")
     return uid_str, pass_str, None, "N/A"
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -185,6 +185,8 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data = json.load(f)
 
         accounts_to_process = []
+        
+        # Universal parser for both List and Dictionary formats
         if isinstance(data, list):
             for acc in data:
                 if isinstance(acc, dict):
@@ -209,7 +211,6 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         region_tokens = {}
         success_count = 0
 
-        # Run multi-threaded requests for speed
         loop = asyncio.get_event_loop()
         with ThreadPoolExecutor(max_workers=10) as executor:
             tasks = [
@@ -274,7 +275,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             os.remove(file_path)
 
 async def post_init(application):
-    print("🤖 Bot started successfully with fixed Integer/String parser...")
+    print("🤖 Bot started successfully without Host header conflict...")
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).post_init(post_init).build()
@@ -285,4 +286,4 @@ def main():
 
 if __name__ == '__main__':
     main()
-        
+            
